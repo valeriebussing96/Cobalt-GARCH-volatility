@@ -1,0 +1,164 @@
+---
+title: "Variables"
+output: html_notebook
+---
+  
+#Loading packages
+```{r}
+library(tempdisagg)
+library(tsbox)
+library(timeDate)
+library(glmnet)
+library(caret)
+library(broom)
+library(jtools)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+```
+
+
+# ------------------------------------------------------------------------------
+# ------------------------ 1. DV: Security daily data --------------------------
+# ------------------------------------------------------------------------------
+
+
+#1.) DVs: Construct dataframe containing all dependent variables. Timeframe: 2010-11-18 till 2020-04-30
+```{r}
+merged_DV <- multmerge("C://DV")
+
+# Calculate continuously compounded daily log returns
+f_r <- ccret(merged_DV,2)
+fca_r <- ccret(merged_DV,3)
+gm_r <- ccret(merged_DV,4)
+tesla_r <- ccret(merged_DV,5)
+grid_r <- ccret(merged_DV,6)
+xrt_r <- ccret(merged_DV,7)
+
+# Calculate weighted return of EV portfolio
+EV_w <- (f_r + fca_r + gm_r + tesla_r)/4
+
+# Construct new data frame with returns of all dependent variables 
+DV <- data.frame(merged_DV$Date[2:2375], f_r, fca_r, gm_r, tesla_r, EV_w, grid_r, xrt_r)
+colnames(DV)[1] <- "Date"
+DV <- DV[1:2374,]
+write.csv(DV,"DV_2.csv")
+```
+
+
+# ---------------------------------------------------------------------------------------------------
+# ---------------------------- 2. Macroeconomic factors and S&P 500 data ----------------------------
+# ---------------------------------------------------------------------------------------------------
+
+
+# Construct dataframe of macroeconomic variables
+```{r}
+# Load DXY (USD exchange rate)
+exchange <- read.csv("exchange3.csv", header = FALSE, sep = ";")
+names(exchange) <- c("y", "m", "d", "DXY")
+exchange$Date <- paste(exchange$y,"-",exchange$m,"-",exchange$d)
+exchange <- exchange[4:5]
+exchange$Date <- as.Date(exchange$Date, format = "%Y - %m - %d")
+write.csv(exchange,"exch.csv")
+
+# Load monthly inflation rate. Temporal disaggregation into daily observations
+infl_monthly <- read.csv('inflation.csv')
+names(infl_monthly) <- c("time", "value")
+infl_daily <- td(infl_monthly ~ 1, to = "daily", method = "fast")
+predict(infl_daily)
+inflation <- data.frame(infl_daily[["values"]])
+names(inflation) <- c("Date", "Inflation")
+write.csv(inflation,"infl.csv")
+
+# Load 3-month Treasury bill daily rates and daily DXY (USD exchange rates)
+interest <- read.csv("interest.csv")[2:3]
+colnames(interest) <- c("Date", "Interest")
+
+# Merge the four macroeconomic variables
+macro_merge <- multmerge("C://macro")
+sp500_r <- ccret(macro_merge,3)
+exchange_r <- ccret(macro_merge,5)
+inflation_r <- ccret(macro_merge,7)
+vix_r <- ccret(macro_merge,11)
+macro_merge <- data.frame(macro_merge[1:2374,],sp500_r,exchange_r,inflation_r,vix_r)
+macro_merge <- macro_merge[-c(2:8,10,11)]
+colnames(macro_merge)[2] <- "interest"
+macro_merge <- macro_merge[,c(1,3,2,4,5,6)]
+write.csv(macro_merge,"macro_merge.csv")
+```
+
+
+# --------------------------------------------------------------------------------------------------------------------------
+# ---------------------------- 3. Merge DVs with IVs and construct extended lags and subsamples ----------------------------
+# --------------------------------------------------------------------------------------------------------------------------
+
+
+# Merge IVs with DVs with lags of zero, one and three days
+```{r}
+# Construct mergeddata set without lags
+t0 <- multmerge("C://full")
+t0 <- t0[-c(2,10,27)]
+t0$interest <- as.numeric(t0$interest)
+
+# Merged dataset with t+1. Construct new "DateIV" variable which denotes the date of the independent variables
+t1_merged <- t0
+t1_merged$DateIV <- t1_merged$Date
+t1_merged <- subset(t1_merged, select = c(1:8,30,9:29))
+t1_DV <- t1_merged[2:2124,1:8]
+t1_IV <- t1_merged[1:2123,9:30]
+t1 <- data.frame(t1_DV,t1_IV)
+
+# Merged dataset with t+3
+t3_DV <- t1_merged[4:2124,1:8]
+t3_IV <- t1_merged[1:2121,9:30]
+t3 <- data.frame(t3_DV,t3_IV)
+```
+
+
+# Construct EV-GRID portfolio (LI) for macroeconomic factor model
+```{r}
+t1$LI <- (t1[6]+t1[7])/2
+t1$LI_excess <- t1$LI - t1$interest
+t1$sp_excess <- t1$sp500_r - t1$interest
+```
+
+
+# COVID-19 subsamples
+```{r}
+sample1 <- t1[1:2051,]
+sample2 <- t1[2052:2123,]
+
+sample1$COVID19 <- sample1$Date
+sample1$COVID19[sample1$Date <= as.Date("2020-01-10")] <- 0
+
+sample2$COVID19 <- sample2$Date
+sample2$COVID19[sample2$Date > as.Date("2020-01-10")] <- 1
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  

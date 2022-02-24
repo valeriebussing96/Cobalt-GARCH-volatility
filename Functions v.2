@@ -1,0 +1,133 @@
+
+#1.) Count outliers and plot histograms
+```{r}
+outliers <- function(dt, var, col_number) {
+  var_name <- eval(substitute(var),eval(dt))
+  na1 <- sum(is.na(var_name))
+  m1 <- mean(var_name, na.rm = T)
+  par(mfrow=c(2, 2), oma=c(0,0,3,0))
+  boxplot(var_name, main= paste(names((dt)[col_number]),"with outliers"))
+  hist(var_name, main = paste(names((dt)[col_number]),"with outliers"), breaks = 20, border = "red", xlab = NA, ylab = NA)
+  outlier <- boxplot.stats(var_name)$out
+  mo <- mean(outlier)
+  var_name <- ifelse(var_name %in% outlier, NA, var_name)
+  boxplot(var_name, main = paste(names((dt)[col_number]),"after winsorizing outliers"))
+  hist(var_name, main = paste(names((dt)[col_number]),"after winsorizing outliers"), breaks = 20, border = "blue", xlab = NA, ylab = NA)
+  title("Outlier Check", outer=TRUE)
+  na2 <- sum(is.na(var_name))
+  cat("Outliers identified:", na2 - na1, "n")
+  cat("Propotion (%) of outliers:", round((na2 - na1) / sum(!is.na(var_name))*100, 1), "n")
+  cat("Mean of the outliers:", round(mo, 2), "n")
+  m2 <- mean(var_name, na.rm = T)
+  cat("Mean without removing outliers:", round(m1, 2), "n")
+  cat("Mean if we remove outliers:", round(m2, 2), "n")
+}
+```
+
+
+#2.) Winsorize outliers at the 1st and 99th percentile
+```{r}
+winsorize <- function(dt,var){
+  q <- quantile(var, c(0.01, 0.99), na.rm = TRUE)
+  dt$Wvar <- var
+  dt[dt$Wvar < q[1], "Wvar"] <- q[1]
+  dt[dt$Wvar > q[2], "Wvar"] <- q[2]
+  return(Wvar)
+}
+```
+
+
+#3.) Define US trading day calendar between two data points 
+```{r}
+us_tradingdays <- function(date1, date2) {  #format dates as "yyyy-mm-dd"
+  date.sequence <- timeSequence(as.Date(date1), as.Date(date2))
+  years.included <- unique(as.integer(format(x = date.sequence, format = "%Y")))
+  holidays <- holidayNYSE(years.included)
+  business.days <- date.sequence[isBizday(date.sequence, holidays)]
+  return(business.days)
+}
+```
+
+
+#4.) Define US trading day calendar between two data points 
+```{r}
+uk_tradingdays <- function(date1, date2) {  #format dates as "yyyy-mm-dd"
+  date.sequence <- timeSequence(as.Date(date1), as.Date(date2))
+  years.included <- unique(as.integer(format(x = date.sequence, format = "%Y")))
+  holidays <- holidayNYSE(years.included)
+  business.days <- date.sequence[isBizday(date.sequence, holidays)]
+}
+```
+
+
+#5.) Construct counting column for weekly business days
+```{r}
+weekly_days <- function(df){
+  n <- nrow(df)
+  x <- 0
+  i <- 0
+  c <- 0
+  value_vector = NULL
+  while (i < n) {
+    i <- 1+ (5 * x)
+    value_vector[c] <- i
+    c <- (c+1)
+    x <- (x+1)
+  }
+  value_vector <- data.frame(value_vector)
+  colnames(value_vector)[1] <- "ID"
+  return(value_vector)
+}
+```
+
+
+#5.) Aggregate daily trading days to weekly trading days
+```{r}
+weekly_bizdays <- function(x) {
+    days <- x + 1:10
+    for (i in 1:450){
+      next_week <- days[isBizday(as.timeDate(days))][5]
+      print(next_week)
+    }
+    data.frame(DateIn = x, next_week, DayOfWeek = weekdays(next_week), 
+               TimeDiff = difftime(next_week, x))
+}
+```
+
+
+#6.)Merge multiple CSV files
+```{r}
+multmerge = function(mypath){
+  filenames = list.files(path = mypath, full.names = TRUE)
+  datalist = lapply(filenames, function(x){read.csv(file = x, header = TRUE, stringsAsFactors = FALSE)}) 
+  Reduce(function(x,y) {merge(x,y, by = c("Date"))}, datalist)
+}
+```
+
+
+#7.) Calculate continuously compounded daily returns of "x" located in column "y"
+```{r}
+ccret <- function(x,y) {
+  n <- nrow(x)
+  x_ccret <- 100 * (log(x[2:n,y]) - log(x[1:(n-1),y]))
+} 
+```
+
+
+#8.) Add empty row
+```{r}
+empty_row <- function(df,x) {
+  df[nrow(df) + x,] <- NA
+}
+```
+
+
+#9.) Reverse column order in df 
+```{r}
+reverse_order <- function(df) {
+  df <- df[dim(df)[1]:1,]
+}
+```
+
+
+

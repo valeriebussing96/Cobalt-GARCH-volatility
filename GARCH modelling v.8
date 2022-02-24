@@ -1,0 +1,546 @@
+---
+title: "GARCH modelling"
+output: html_notebook
+
+---
+
+  
+# Load packages
+```{r}
+library(rugarch)
+library(magrittr)
+library(varhandle)
+library(xts)
+library(tidyverse)
+```
+
+
+# Import cobalt futures contracts and calculate returns 
+```{r}
+cobalt <- read.csv("cobalt.csv", sep = ";")[(2:2180),c(1,3,6)]
+cobalt$Date <- as.Date(cobalt$Date)
+cobalt <- arrange(cobalt,Date)
+cobalt_r <- cobalt$cobalt_r
+```
+
+
+# Import gasoline futures contracts, calculate returns and winsorize outliers
+```{r}
+gas <- read.csv("gas.csv", sep = ";")[(2:2662),c(1,3,6)]
+gas$Date <- as.Date(gas$Date)
+gas <- arrange(gas,Date)
+
+#Checking for outliers in daily returns of gasoline futures prices
+outliers(gas, `gas_r`,2)
+
+# Winsorizing outliers
+q <- quantile(gas[2], probs = c(0.05, 0.95), na.rm = TRUE)
+gas$gas_Wr <- gas$gas_r
+gas[gas$gas_r < q[1], "gas_Wr"] <- q[1]
+gas[gas$gas_r > q[2], "gas_Wr"] <- q[2]
+
+gas <- gas[,c(1,3:4)]
+gas_Wr <- gas$gas_Wr
+```
+
+
+# Convert daily cobalt futures data to weekly observations. Calculate weekly returns
+```{r}
+cobalt_w <- cobalt[(7:2180),c(1,4)]
+cobalt_w <- tibble::rowid_to_column(cobalt_w,"ID")
+cobalt_w_r <- cobalt_w$Cumulative.returns.t.5
+
+# Construct column which denotes the first day of each business week, i.e. days that are 5 bunsiness days apart, starting at 1. SO c(1, 6, 11, 17, 22) etc. 
+Ccount <- weekly_days(cobalt_w)
+cobalt_w <- merge(Ccount,cobalt_w, by = "ID")
+```
+
+
+# Convert daily gasoline futures data to weekly observations. Calculate weekly returns
+```{r}
+gas_w <- gas[6:2660,1:2]
+gas_w <- tibble::rowid_to_column(gas_w,"ID")
+
+# Construct column which denotes the first day of each business week, i.e. days that are 5 bunsiness days apart, starting at 1. SO c(1, 6, 11, 17, 22) etc. 
+Gcount <- weekly_days(gas_w)
+gas_w <- merge(Gcount,gas_w, by = "ID")
+gas_w_r <- gas_w$Cumulative.returns.t.5
+```
+
+
+---------------------------------------------------------------------------------------------------------------------------------
+----------------------------------------------- 1.1) DAILY COBALT GARCH MODELLING -----------------------------------------------
+---------------------------------------------------------------------------------------------------------------------------------
+  
+  
+----------------------- STEP 1: GARCH model specification -----------------------
+  
+#1) Constant mean, standard GARCH(1,1) model
+```{r}
+Cgarchspec <- ugarchspec(
+  mean.model = list(armaOrder = c(0,0)),
+  variance.model = list(model = "sGARCH"),
+  distribution.model = "norm")
+Cgarchspec
+```
+
+
+
+----------------------- STEP 2: GARCH model estimation -----------------------
+  
+  
+```{r}
+Cgarchfit <- ugarchfit(data = cobalt_r,
+                       spec = Cgarchspec)
+Cgarchfit
+plot(Cgarchfit)
+```
+
+
+
+#2) Contents of "Cgarchfit"
+```{r}
+# Coefficients
+Cgarchcoef <- coef(Cgarchfit)
+# Unconditional variance
+Cgarchuncvar <- uncvariance(Cgarchfit)
+# Predicted mean
+Cgarchmean <- fitted(Cgarchfit)
+# Predicted volatilities
+Cgarchvol <- sigma(Cgarchfit)
+```
+
+
+#2) Estimated GARCH coefficients for daily cobalt futures returns
+```{r}
+print(Cgarchcoef)
+sqrt(Cgarchuncvar) 
+summary(Cgarchuncvar)
+```
+
+
+#2) Creating dataframe with cobalt GARCH output and calculate returns. Winsorize outliers
+```{r}
+# Calculate cobalt GARCH returns
+Cgarch <- data.frame(cobalt$Date,sigma(Cgarchfit))
+names(Cgarch) <- c("Date", "Cgarch")
+Cgarch_r <- ccret(Cgarch,2)
+Cgarch <- Cgarch[2:2179,]
+Cgarch <- data.frame(Cgarch,Cgarch_r)
+
+# Check for outliers
+outliers(Cgarch, `Cgarch`,2)
+outliers(Cgarch, `Cgarch_r`,3)
+
+# Winsorize GARCH outliers
+q1 <- quantile(Cgarch$Cgarch, probs = c(0.05, 0.95), na.rm = TRUE)
+Cgarch$Cgarch_W <- Cgarch$Cgarch
+Cgarch[!is.na(Cgarch$Cgarch_W) & Cgarch$Cgarch_W < q1[1], "Cgarch_W"] <- q1[1]
+Cgarch[!is.na(Cgarch$Cgarch_W) & Cgarch$Cgarch_W > q1[2], "Cgarch_W"] <- q1[2]
+
+# Winsorize GARCH returns outliers
+q2 <- quantile(Cgarch$Cgarch_r, probs = c(0.05, 0.95), na.rm = TRUE)
+Cgarch$Cgarch_Wr <- Cgarch$Cgarch_r
+Cgarch[Cgarch$Cgarch_Wr < q2[1], "Cgarch_Wr"] <- q2[1]
+Cgarch[Cgarch$Cgarch_Wr > q2[2], "Cgarch_Wr"] <- q2[2]
+
+Cgarch <- Cgarch[,c(1,4:5)]
+Cgarch <- data.frame(cobalt[2:2179,2],Cgarch)
+colnames(Cgarch)[1] <- "cobalt_r"
+Cgarch <- Cgarch[,c(2,1,3,4)]
+write.csv(Cgarch,"cgarch.csv")
+```
+
+
+
+----------------------- STEP 3: Forecast volatility of cobalt futures returns -----------------------
+ 
+```{r}
+Cgarchforecast <- ugarchforecast(fitORspec = Cgarchfit,
+                                 n.ahead = 5)
+Cgarchforecast
+```
+
+
+---------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------- 1.2) DAILY GASOLINE MODELLING ----------------------------------------------
+---------------------------------------------------------------------------------------------------------------------------
+  
+  
+----------------------- STEP 1: GARCH model specification -----------------------
+  
+  
+  
+#1) Constant mean, standard GARCH(1,1) model
+```{r}
+Ggarchspec <- ugarchspec(
+  mean.model = list(armaOrder = c(0,0)),
+  variance.model = list(model = "sGARCH"),
+  distribution.model = "norm")
+Ggarchspec
+```
+
+
+
+----------------------- STEP 2: GARCH model estimation -----------------------
+  
+# Fitting the model
+```{r}
+Ggarchfit <- ugarchfit(data = gas_Wr,
+                       spec = Ggarchspec)
+Ggarchfit
+plot(Ggarchfit)
+```
+
+
+
+#2) Contents of "Cgarchfit"
+```{r}
+# Coefficients
+Ggarchcoef <- coef(Ggarchfit)
+# Unconditional variance
+Ggarchuncvar <- uncvariance(Ggarchfit)
+# Predicted mean
+Ggarchmean <- fitted(Ggarchfit)
+# Predicted volatilities
+Ggarchvol <- sigma(Ggarchfit)
+```
+
+
+#2) Estimated GARCH coefficients for daily cobalt futures returns
+```{r}
+print(Ggarchcoef)
+sqrt(Ggarchuncvar) %>% print
+```
+
+
+#2) Creating dataframe with gasoline GARCH and calculating returns. Checking for outliers: Ggarch doesn't have outliers! Winsorize returns outliers
+```{r}
+# Calculate GARCH returns and merge dataframes
+Ggarch <- data.frame(gas, sigma(Ggarchfit))
+colnames(Ggarch)[3] <- "Ggarch"
+Ggarch_r <- ccret(Ggarch,3)
+Ggarch <- Ggarch[2:2661,]
+Ggarch <- data.frame(Ggarch,Ggarch_r)
+
+# Check for outliers
+outliers(Ggarch, `Ggarch`,3)
+outliers(Ggarch, `Ggarch_r`,4)
+
+# Winsorize GARCH return outliers
+q3 <- quantile(Ggarch$Ggarch_r, probs = c(0.05, 0.95), na.rm = TRUE)
+Ggarch$Ggarch_Wr <- Ggarch$Ggarch_r
+Ggarch[Ggarch$Ggarch_r < q3[1], "Ggarch_Wr"] <- q3[1]
+Ggarch[Ggarch$Ggarch_r > q3[2], "Ggarch_Wr"] <- q3[2]
+
+# Visul check of distributions
+
+Ggarch <- Ggarch[,c(1:3,5)]
+```
+
+
+
+----------------------- STEP 3: Forecast volatility of gasoline futures returns. Rolling windows prediction -----------------------
+
+```{r}
+Ggarchforecast <- ugarchforecast(fitORspec = Ggarchfit,
+                                 n.ahead = 5)
+Ggarchforecast
+```
+
+
+# Rolling window of n = 100
+```{r}
+Ggarchroll <- ugarchroll(Ggarchspec, data = gas$wins_gas_r, n.start = 100, refit.window = "moving", refit.every = 10)
+Gpreds <- as.data.frame(Ggarchroll)
+Ggarchvol <- xts(Gpreds$Sigma, order.by = as.Date(rownames(Gpreds)))
+plot(Ggarchvol, col = "blue", grid.col = "lightgrey", lwd = 1, main = "Rolling predictions of gasoline futures volatility")
+```
+
+
+------------------------------------------------------------------------------------------------------------
+------------------------------- 1.3) DAILY ASYMMETRIC AND EXTREME VALUES -----------------------------------
+------------------------------------------------------------------------------------------------------------
+
+
+# Asymmetric cobalt (GARCH) returns as well as extreme stationary GARCH values
+```{r}
+# Asummetric values of cobalt futures returns
+Cgarch$cobaltplus <- Cgarch$cobalt_r
+Cgarch$cobaltplus[Cgarch$cobalt_r <=0] <- 0
+Cgarch$cobaltminus <- Cgarch$cobalt_r
+Cgarch$cobaltminus[Cgarch$cobalt_r >=0] <- 0
+
+# Asymmetric values of cobalt GARCH returns
+Cgarch$Cgarch_r_plus <- Cgarch$Cgarch_Wr
+Cgarch$Cgarch_r_plus[Cgarch$Cgarch_Wr <=0] <- 0
+Cgarch$Cgarch_r_minus <- Cgarch$Cgarch_Wr
+Cgarch$Cgarch_r_minus[Cgarch$Cgarch_Wr >=0] <- 0
+
+# Extreme cobalt GARCH values (those that exceed two standard deviations from the mean).
+CSD <- sd(Cgarch$Cgarch_W)
+CM <- mean(Cgarch$Cgarch_W)
+Cgarch$Cgarch.extreme <- ifelse(Cgarch$Cgarch_W > (2*CSD + CM),1,0)
+write.csv(Cgarch, "cgarch.csv")
+```
+
+
+# Asymmetric gasoline (GARCH) returns as well as extreme stationary GARCH values
+```{r}
+# Asummetric values of gasoline futures returns
+Ggarch$gasplus <- gas[2:2661,2]
+Ggarch$gasplus[gas[2:2661,2] <=0] <- 0
+Ggarch$gasminus <- gas[2:2661,2]
+Ggarch$gasminus[gas[2:2661,2] >=0] <- 0
+
+# Asymmetric values of gasoline GARCH values
+Ggarch$Ggarch_r_plus <- Ggarch$Ggarch_Wr
+Ggarch$Ggarch_r_plus[Ggarch$Ggarch_Wr <=0] <- 0
+Ggarch$Ggarch_r_minus <- Ggarch$Ggarch_Wr
+Ggarch$Ggarch_r_minus[Ggarch$Ggarch_Wr >=0] <- 0
+
+# Extreme cobalt GARCH values (those that exceed two standard deviations from the mean).
+GSD <- sd(Ggarch$Ggarch)
+GM <- mean(Ggarch$Ggarch)
+Ggarch$Ggarch.extreme <- ifelse(Ggarch$Ggarch > (2*GSD + GM),1,0)
+write.csv(Ggarch,"ggarch.csv")
+```
+
+
+---------------------------------------------------------------------------------------------
+------------------------------- 1.4) MERGE DAILY DATASETS -----------------------------------
+---------------------------------------------------------------------------------------------
+
+
+# Merge daily datasets with commodity returns and GARCH values
+```{r}
+full_commodities <- merge(Cgarch, Ggarch, by = "Date")
+write.csv(full_commodities,"full_commodities.csv")
+```
+
+
+
+
+---------------------------------------------------------------------------------------------------------------------------------
+----------------------------------------------- 2.1) WEEKLY COBALT GARCH MODELLING ----------------------------------------------
+---------------------------------------------------------------------------------------------------------------------------------
+  
+  
+----------------------- STEP 1: GARCH model specification -----------------------
+  
+#1) Constant mean, standard GARCH(1,1) model
+```{r}
+Cgarchspec <- ugarchspec(
+  mean.model = list(armaOrder = c(0,0)),
+  variance.model = list(model = "sGARCH"),
+  distribution.model = "norm")
+Cgarchspec
+```
+
+
+
+----------------------- STEP 2: GARCH model estimation -----------------------
+  
+  
+```{r}
+CW.garchfit <- ugarchfit(data = cobalt_w_r,
+                       spec = Cgarchspec)
+CW.garchfit
+```
+
+
+
+#2) Contents of "Cgarchfit"
+```{r}
+# Coefficients
+CW.garchcoef <- coef(CW.garchfit)
+# Unconditional variance
+CW.garchuncvar <- uncvariance(CW.garchfit)
+# Predicted mean
+CW.garchmean <- fitted(CW.garchfit)
+# Predicted volatilities
+CW.garchvol <- sigma(CW.garchfit)
+```
+
+
+#2) Estimated GARCH coefficients for daily cobalt futures returns
+```{r}
+print(CW.garchcoef)
+sqrt(CW.garchuncvar) 
+summary(CW.garchuncvar)
+```
+
+
+#2) Creating dataframe with cobalt GARCH output and calculate returns. Winsorize outliers
+```{r}
+# Calculate cobalt GARCH returns
+CW.garch <- data.frame(cobalt_w$Date, sigma(CW.garchfit))
+names(CW.garch) <- c("Date", "CW.garch")
+CW.garch_r <- ccret(CW.garch,2)
+CW.garch <- CW.garch[2:434,]
+CW.garch <- data.frame(CW.garch,CW.garch_r)
+
+# Check for outliers
+outliers(CW.garch, `CW.garch`,2)
+outliers(CW.garch, `CW.garch_r`,3)
+
+# Winsorize GARCH outliers
+q5 <- quantile(CW.garch$CW.garch, probs = c(0.05, 0.95), na.rm = TRUE)
+CW.garch$CW.garch_W <- CW.garch$CW.garch
+CW.garch[CW.garch$CW.garch_W < q5[1], "CW.garch_W"] <- q5[1]
+CW.garch[CW.garch$CW.garch_W > q5[2], "CW.garch_W"] <- q5[2]
+
+# Winsorize GARCH returns outliers
+q6 <- quantile(CW.garch$CW.garch_r, probs = c(0.05, 0.95), na.rm = TRUE)
+CW.garch$CW.garch_Wr <- CW.garch$CW.garch_r
+CW.garch[CW.garch$CW.garch_Wr < q6[1], "CW.garch_Wr"] <- q6[1]
+CW.garch[CW.garch$CW.garch_Wr > q6[2], "CW.garch_Wr"] <- q6[2]
+
+# Visual check of distribution
+hist(CW.garch$CW.garch)
+hist(CW.garch$CW.garch_W)
+hist(CW.garch$CW.garch_r)
+hist(CW.garch$CW.garch_Wr)
+
+CW.garch <- CW.garch[,c(1,3:4)]
+write.csv(CW.garch, "cw_garch.csv")
+```
+
+
+
+----------------------- STEP 3: Forecast volatility of cobalt futures returns -----------------------
+ 
+```{r}
+CW.garchforecast <- ugarchforecast(fitORspec = Cgarchfit,
+                                 n.ahead = 5)
+CW.garchforecast
+```
+
+
+----------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------- 2.2) WEEKLY GASOLINE MODELLING ----------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------
+  
+  
+----------------------- STEP 1: GARCH model specification -----------------------
+  
+  
+  
+#1) Constant mean, standard GARCH(1,1) model
+```{r}
+Ggarchspec <- ugarchspec(
+  mean.model = list(armaOrder = c(0,0)),
+  variance.model = list(model = "sGARCH"),
+  distribution.model = "norm")
+Ggarchspec
+```
+
+
+
+----------------------- STEP 2: GARCH model estimation -----------------------
+  
+# Fitting the model
+```{r}
+GW.garchfit <- ugarchfit(data = gas_w_r,
+                       spec = Ggarchspec)
+GW.garchfit
+plot(GW.garchfit)
+```
+
+
+
+#2) Contents of "Cgarchfit"
+```{r}
+# Coefficients
+GW.garchcoef <- coef(GW.garchfit)
+# Unconditional variance
+GW.garchuncvar <- uncvariance(GW.garchfit)
+# Predicted mean
+GW.garchmean <- fitted(GW.garchfit)
+# Predicted volatilities
+GW.garchvol <- sigma(GW.garchfit)
+```
+
+
+#2) Estimated GARCH coefficients for daily cobalt futures returns
+```{r}
+print(GW.garchcoef)
+sqrt(GW.garchuncvar) %>% print
+```
+
+
+#2) Creating dataframe with gasoline GARCH and calculating returns. Winsorize returns outliers
+```{r}
+# Calculate GARCH returns and merge dataframes
+GW.garch <- data.frame(gas_w[2], sigma(GW.garchfit))
+colnames(GW.garch)[2] <- "GW.garch"
+GW.garch_r <- ccret(GW.garch,2)
+GW.garch <- GW.garch[2:530,]
+GW.garch <- data.frame(GW.garch,GW.garch_r)
+
+# Check for outliers
+outliers(GW.garch, `GW.garch`,2)
+outliers(GW.garch, `GW.garch_r`,3)
+
+# Winsorize GARCH outliers
+q3 <- quantile(GW.garch$GW.garch, probs = c(0.01, 0.99), na.rm = TRUE)
+GW.garch$GW.garch_W <- GW.garch$GW.garch
+GW.garch[GW.garch$GW.garch_W < q3[1], "GW.garch_W"] <- q3[1]
+GW.garch[GW.garch$GW.garch_W > q3[2], "GW.garch_W"] <- q3[2]
+
+# Winsorize GARCH return outliers
+q4 <- quantile(GW.garch$GW.garch_r, probs = c(0.05, 0.95), na.rm = TRUE)
+GW.garch$GW.garch_Wr <- GW.garch$GW.garch_r
+GW.garch[GW.garch$GW.garch_Wr < q4[1], "GW.garch_Wr"] <- q4[1]
+GW.garch[GW.garch$GW.garch_Wr > q4[2], "GW.garch_Wr"] <- q4[2]
+
+
+GW.garch <- GW.garch[3:4]
+write.csv(GW.garch,"gw_garch.csv")
+```
+
+
+
+----------------------- STEP 3: Forecast volatility of cobalt futures returns -----------------------
+  
+ 
+```{r}
+GW.garchforecast <- ugarchforecast(fitORspec = GW.garchfit,
+                                 n.ahead = 5)
+GW.garchforecast
+```
+
+
+
+------------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------- 2.3) MERGE WEEKLY GARCH DATASETS ----------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------
+
+
+# Merge commodity returns and GARCH values
+```{r}
+cobalt_w <- cobalt_w[2:434,]
+cobalt_w_full <- data.frame(cobalt_w,CW.garch)
+
+gas_w <- gas_w[2:531,]
+gas_w_full <- data.frame(gas_w,GW.garch)
+
+weekly_commodities <- merge(CW.garch,GW.garch, by = "Date")
+write.csv(weekly_commodities,"weekly_com.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
